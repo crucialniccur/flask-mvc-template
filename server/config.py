@@ -2,7 +2,9 @@
 
 import os
 
-from dotenv import load_dotenv  # noqa: F401
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class Config:
