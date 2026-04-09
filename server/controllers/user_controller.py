@@ -4,7 +4,9 @@
 from flask import Blueprint, request
 from flask_restful import Api, Resource
 from models import db
-from models.user import User as Usermodel
+from models.user import (
+    User as Usermodel,  # Remember to user UseModel when querying the database
+)
 from utils.cloudinary_helper import upload_image
 
 user_bp = Blueprint("users", __name__, url_prefix="/users")
