@@ -38,7 +38,7 @@ class User(Resource):
 
 class UserByID(Resource):
     def get(self, id):
-        user = User.query.get(id)
+        user = Usermodel.query.get(id)
 
         if not user:
             return {"error": "user not found."}, 404
