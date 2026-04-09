@@ -10,7 +10,11 @@ with app.app_context():
     User.query.delete()
 
     print("Seed the Users init.....")
-    users = [User(name="John"), User(name="Stacy"), User(name="Regina")]
+    users = [
+        User(name="John", image_url=None),
+        User(name="Stacy", image_url=None),
+        User(name="Regina", image_url=None),
+    ]
 
     db.session.add_all(users)
     db.session.commit()
