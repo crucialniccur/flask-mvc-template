@@ -36,4 +36,14 @@ class User(Resource):
         return user.to_dict(), 201
 
 
+class UserByID(Resource):
+    def get(self, id):
+        user = User.query.get(id)
+
+        if not user:
+            return {"error": "user not found."}, 404
+        return user.to_dict(), 200
+
+
 api.add_resource(User, "/")
+api.add_resource(UserByID, "/<int:id>")
