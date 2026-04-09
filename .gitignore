@@ -11,7 +11,7 @@ __pycache__/
 *.pyo
 
 # Migrations (optional — some people commit these, some don't)
-# migrations/
+migrations/
 
 # VS Code
 .vscode/
