@@ -3,6 +3,7 @@ from config import Config
 # Import blueprints
 from controllers.user_controller import user_bp
 from flask import Flask
+from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
 from models import db
 
@@ -13,6 +14,7 @@ def create_app():
 
     db.init_app(app)
     Migrate(app, db)
+    JWTManager(app)
 
     with app.app_context():
         from models import user  # noqa: F401
