@@ -955,3 +955,535 @@ python_version = "3.12"
 ---
 
 > JWT authentication, protecting routes, and email API integration.
+
+# STEP 3 — JWT Authentication
+
+> **Goal:** Protect your API routes so only authenticated users can access them.
+> Users register with a password, log in to get a token, and send that token
+> with every protected request.
+> Steps 1 and 2 must be complete before starting here.
+
+---
+
+## 📖 Table of Contents
+
+1. [What is JWT and Why Do We Use It?](#what-is-jwt)
+2. [How Authentication Works in This App](#auth-flow)
+3. [What Changes in Step 3?](#what-changes)
+4. [File by File — Step 3](#file-by-file)
+5. [Setup Instructions — Step 3](#setup-step3)
+6. [Testing in Postman](#testing-step3)
+7. [⚠️ Step 3 Cautions](#cautions-step3)
+
+---
+
+## 1. What is JWT and Why Do We Use It? <a name="what-is-jwt"></a>
+
+JWT stands for **JSON Web Token**. It's a way for your server to hand a user
+a signed "pass" after they log in. The user shows that pass on every request
+to prove who they are.
+
+A JWT has three parts separated by dots:
+
+```
+eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123signature
+      HEADER                PAYLOAD          SIGNATURE
+```
+
+| Part          | What it contains                          |
+| ------------- | ----------------------------------------- |
+| **Header**    | Algorithm used to sign the token          |
+| **Payload**   | Data you stored — e.g. the user's `id`    |
+| **Signature** | Proof the token hasn't been tampered with |
+
+> 💡 The payload is **base64 encoded, not encrypted**. Anyone can decode it.
+> Never store passwords or sensitive data in a JWT payload.
+> The signature just proves the server issued it — it can't be faked without
+> the secret key.
+
+### Why tokens instead of sessions?
+
+REST APIs are **stateless** — the server remembers nothing between requests.
+Sessions require the server to store state. Tokens carry all the information
+the server needs inside the token itself — no server-side storage required.
+
+### Access token vs Refresh token
+
+|               | Access Token                    | Refresh Token                           |
+| ------------- | ------------------------------- | --------------------------------------- |
+| **Purpose**   | Proves identity on each request | Gets a new access token when it expires |
+| **Lifespan**  | Short (15 mins – 1 hour)        | Long (days – weeks)                     |
+| **Sent with** | Every protected request         | Only when getting a new access token    |
+
+In Step 3 we only implement access tokens. Refresh tokens come later.
+
+---
+
+## 2. How Authentication Works in This App <a name="auth-flow"></a>
+
+```
+REGISTER:
+  Client sends name + email + password
+        ↓
+  Server hashes the password (bcrypt)
+        ↓
+  Server saves user to DB
+        ↓
+  Server creates a JWT with user.id as identity
+        ↓
+  Server returns { user, access_token }
+
+LOGIN:
+  Client sends email + password
+        ↓
+  Server finds user by email
+        ↓
+  Server checks password against stored hash (bcrypt)
+        ↓
+  Server creates a JWT with user.id as identity
+        ↓
+  Server returns { user, access_token }
+
+PROTECTED REQUEST:
+  Client sends request + Authorization: Bearer <token>
+        ↓
+  @jwt_required() decorator intercepts the request
+        ↓
+  Flask-JWT-Extended verifies the token signature
+        ↓
+  If valid → route runs normally
+  If invalid/missing → 401 Unauthorized
+```
+
+---
+
+## 3. What Changes in Step 3? <a name="what-changes"></a>
+
+| File                             | What changes                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| `.env`                           | Add `JWT_SECRET_KEY`                                                                 |
+| `config.py`                      | Read `JWT_SECRET_KEY` from env                                                       |
+| `models/user.py`                 | Add `email` and `password_hash` columns, add `serialize_rules`                       |
+| `app.py`                         | Register `JWTManager`                                                                |
+| `controllers/user_controller.py` | Add `Register` and `Login` resources, protect existing routes with `@jwt_required()` |
+| `seed.py`                        | Seed users with hashed passwords and emails                                          |
+
+---
+
+## 4. File by File — Step 3 <a name="file-by-file"></a>
+
+### `.env` — Add JWT secret
+
+```bash
+# .env
+DATABASE_URL="postgresql://..."
+CLOUDINARY_CLOUD_NAME="..."
+CLOUDINARY_API_KEY="..."
+CLOUDINARY_API_SECRET="..."
+JWT_SECRET_KEY="some-super-secret-string-change-this-in-production"  # ← new
+```
+
+> ⚠️ The `JWT_SECRET_KEY` is used to sign and verify every token. If someone
+> gets this key they can forge tokens and impersonate any user. Keep it secret,
+> keep it in `.env`, never commit it.
+
+---
+
+### `server/config.py`
+
+```python
+# server/config.py
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+class Config:
+    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL")
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    JSON_COMPACT = False
+    CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME")
+    CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY")
+    CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET")
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")  # ← new
+```
+
+---
+
+### `server/models/user.py`
+
+```python
+# server/models/user.py
+from sqlalchemy_serializer import SerializerMixin
+
+from . import db
+
+
+class User(db.Model, SerializerMixin):
+    __tablename__ = "users"
+
+    serialize_rules = ("-password_hash",)  # ← never expose password hash in responses
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, nullable=False)
+    email = db.Column(db.String, nullable=False, unique=True)  # ← new
+    password_hash = db.Column(db.String, nullable=False)        # ← new
+    image_url = db.Column(db.String, nullable=True)
+
+    def __repr__(self):
+        return f"<User {self.name}>"
+```
+
+> ⚠️ **`serialize_rules = ("-password_hash",)` is critical.**
+> Without it, `.to_dict()` will include the password hash in every response.
+> The `-` means "exclude this field." Never send password hashes to clients.
+
+---
+
+### `server/app.py`
+
+```python
+# server/app.py
+from config import Config
+from controllers.user_controller import user_bp
+from flask import Flask
+from flask_jwt_extended import JWTManager
+from flask_migrate import Migrate
+from models import db
+
+
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(Config)
+
+    db.init_app(app)
+    Migrate(app, db)
+    JWTManager(app)  # ← new — reads JWT_SECRET_KEY from config automatically
+
+    with app.app_context():
+        from models import user  # noqa: F401
+
+    app.register_blueprint(user_bp)
+
+    return app
+
+
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(port=5555, debug=True)
+```
+
+---
+
+### `server/controllers/user_controller.py`
+
+```python
+# server/controllers/user_controller.py
+from flask import Blueprint, request
+from flask_bcrypt import Bcrypt
+from flask_jwt_extended import create_access_token, jwt_required
+from flask_restful import Api, Resource
+
+from models import db
+from models.user import User as UserModel
+from utils.cloudinary_helper import upload_image
+
+user_bp = Blueprint("users", __name__, url_prefix="/users")
+api = Api(user_bp)
+bcrypt = Bcrypt()
+
+
+class UserList(Resource):
+    @jwt_required()  # ← protected — requires valid token
+    def get(self):
+        users = [u.to_dict() for u in UserModel.query.all()]
+        return users, 200
+
+
+class UserByID(Resource):
+    @jwt_required()  # ← protected
+    def get(self, id):
+        user = UserModel.query.get(id)
+        if not user:
+            return {"error": "user not found."}, 404
+        return user.to_dict(), 200
+
+
+class Register(Resource):
+    def post(self):
+        name = request.form.get("name")
+        email = request.form.get("email")
+        password = request.form.get("password")
+        file = request.files.get("image")
+
+        if not name or not email or not password:
+            return {"error": "name, email and password are required"}, 400
+
+        if UserModel.query.filter_by(email=email).first():
+            return {"error": "email already registered"}, 409
+
+        password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
+
+        image_url = None
+        if file:
+            image_url = upload_image(file)
+
+        user = UserModel(
+            name=name,
+            email=email,
+            password_hash=password_hash,
+            image_url=image_url,
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        access_token = create_access_token(identity=str(user.id))
+
+        return {"user": user.to_dict(), "access_token": access_token}, 201
+
+
+class Login(Resource):
+    def post(self):
+        email = request.form.get("email")
+        password = request.form.get("password")
+
+        if not email or not password:
+            return {"error": "email and password are required"}, 400
+
+        user = UserModel.query.filter_by(email=email).first()
+
+        if not user or not bcrypt.check_password_hash(user.password_hash, password):
+            return {"error": "invalid credentials"}, 401
+
+        access_token = create_access_token(identity=str(user.id))
+
+        return {"user": user.to_dict(), "access_token": access_token}, 200
+
+
+api.add_resource(UserList, "/")
+api.add_resource(UserByID, "/<int:id>")
+api.add_resource(Register, "/register")
+api.add_resource(Login, "/login")
+```
+
+> 💡 **Why `bcrypt`?**
+> You never store plain passwords. `bcrypt.generate_password_hash("password123")`
+> turns it into something like `$2b$12$eImiTXuWVxfM37uY4JANjQ...` — a one-way hash.
+> On login, `bcrypt.check_password_hash(hash, password)` compares them safely
+> without ever decrypting the hash.
+
+---
+
+### `server/seed.py`
+
+```python
+# server/seed.py
+from flask_bcrypt import Bcrypt
+
+from app import app
+from models import db
+from models.user import User
+
+bcrypt = Bcrypt()
+
+with app.app_context():
+    print("Clearing old data...")
+    User.query.delete()
+
+    print("Seeding users...")
+    users = [
+        User(
+            name="Alice",
+            email="alice@test.com",
+            password_hash=bcrypt.generate_password_hash("password123").decode("utf-8"),
+            image_url=None,
+        ),
+        User(
+            name="Bob",
+            email="bob@test.com",
+            password_hash=bcrypt.generate_password_hash("password123").decode("utf-8"),
+            image_url=None,
+        ),
+    ]
+
+    db.session.add_all(users)
+    db.session.commit()
+    print("Done! ✅")
+```
+
+---
+
+## 5. Setup Instructions — Step 3 <a name="setup-step3"></a>
+
+```zsh
+# 1. New branch
+git checkout -b step-3-jwt-auth
+
+# 2. Add JWT_SECRET_KEY to .env
+
+# 3. Enter venv and go into server/
+pipenv shell && cd server
+
+# 4. Migrate — new columns need to be added
+flask db migrate -m "add email and password_hash to users"
+flask db upgrade
+
+# 5. Seed and run
+python seed.py
+flask run
+```
+
+---
+
+## 6. Testing in Postman <a name="testing-step3"></a>
+
+### Step 1 — Register
+
+- Method: `POST`
+- URL: `http://localhost:5555/users/register`
+- Body: **form-data**
+
+| Key      | Value         | Type |
+| -------- | ------------- | ---- |
+| name     | TestUser      | Text |
+| email    | test@test.com | Text |
+| password | password123   | Text |
+| image    | (optional)    | File |
+
+Response:
+
+```json
+{
+  "user": { "id": 1, "name": "TestUser", "email": "test@test.com" },
+  "access_token": "eyJhbGci..."
+}
+```
+
+**Copy the `access_token`.**
+
+---
+
+### Step 2 — Login
+
+- Method: `POST`
+- URL: `http://localhost:5555/users/login`
+- Body: **form-data**
+
+| Key      | Value         |
+| -------- | ------------- |
+| email    | test@test.com |
+| password | password123   |
+
+Returns a fresh token. Copy it.
+
+---
+
+### Step 3 — Hit a protected route WITH token
+
+- Method: `GET`
+- URL: `http://localhost:5555/users/`
+- **Authorization tab** → Type: **Bearer Token** → paste token
+
+Returns list of users ✅
+
+---
+
+### Step 4 — Hit a protected route WITHOUT token
+
+- Same `GET /users/` but Authorization: **No Auth**
+
+Returns:
+
+```json
+{ "msg": "Missing Authorization Header" }
+```
+
+This confirms the route is protected ✅
+
+---
+
+## 7. ⚠️ Step 3 Cautions <a name="cautions-step3"></a>
+
+### C16 — Missing column in model causes `invalid keyword argument`
+
+```python
+# ❌ email column missing from model but present in controller
+user = UserModel(name=name, email=email, ...)
+# TypeError: 'email' is an invalid keyword argument for User
+
+# ✅ Every field you use must be defined as a column in the model
+email = db.Column(db.String, nullable=False, unique=True)
+```
+
+### C17 — `NOT NULL` column migration fails when rows already exist
+
+```
+psycopg2.errors.NotNullViolation: column "password_hash" contains null values
+```
+
+PostgreSQL can't add a `NOT NULL` column to a table that already has rows —
+existing rows would have no value for the new column. Fix for dev:
+
+```zsh
+# Clear existing rows first, then upgrade
+python -c "
+from app import app
+from models import db
+with app.app_context():
+    db.session.execute(db.text('DELETE FROM users'))
+    db.session.commit()
+"
+flask db upgrade head
+python seed.py
+```
+
+### C18 — Never expose `password_hash` in responses
+
+```python
+# ✅ Add serialize_rules to exclude it from .to_dict()
+serialize_rules = ("-password_hash",)
+```
+
+Without this, every `GET /users/` response includes the password hash.
+
+### C19 — `JWT_SECRET_KEY` must be set or tokens won't work
+
+```
+RuntimeError: JWT_SECRET_KEY not set
+```
+
+Add it to `.env` and confirm `config.py` reads it:
+
+```python
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+```
+
+### C20 — `JWTManager(app)` must be registered in `create_app()`
+
+```python
+# ✅ Without this, @jwt_required() raises a RuntimeError
+JWTManager(app)
+```
+
+### C21 — `identity` must be a string in `create_access_token`
+
+```python
+# ❌ Passing an integer causes a warning/error in newer versions
+create_access_token(identity=user.id)
+
+# ✅ Always convert to string
+create_access_token(identity=str(user.id))
+```
+
+### C22 — Wrong body type in Postman
+
+Register and Login use `form-data` — not `raw JSON`.
+If you send JSON, `request.form.get("email")` returns `None` and you'll get
+a 400 error even with correct data.
+
+---
+
+> 📝 **Step 4 (coming):** Email API integration and refresh tokens.
