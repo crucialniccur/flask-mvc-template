@@ -1,21 +1,31 @@
 # server/seed.py
-
 from app import app
+from flask_bcrypt import Bcrypt
 from models import db
 from models.user import User
 
-with app.app_context():
+bcrypt = Bcrypt()
 
-    print("Clear old data since it is still dev mode not production mode.....")
+with app.app_context():
+    print("Clearing old data...")
     User.query.delete()
 
-    print("Seed the Users init.....")
+    print("Seeding users...")
     users = [
-        User(name="John", image_url=None),
-        User(name="Stacy", image_url=None),
-        User(name="Regina", image_url=None),
+        User(
+            name="Alice",
+            email="alice@test.com",
+            password_hash=bcrypt.generate_password_hash("password123").decode("utf-8"),
+            image_url=None,
+        ),
+        User(
+            name="Bob",
+            email="bob@test.com",
+            password_hash=bcrypt.generate_password_hash("password123").decode("utf-8"),
+            image_url=None,
+        ),
     ]
 
     db.session.add_all(users)
     db.session.commit()
-    print("Done innit.....")
+    print("Done!")
